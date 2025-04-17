@@ -139,7 +139,7 @@ app.layout = dbc.Container([
                 dbc.CardHeader("Map Controls"),
                 dbc.CardBody([
                     html.Div([html.Label("Display Mode:", className="fw-bold"), dbc.RadioItems(id="map-display-mode", options=[{"label": "Routes", "value": "routes"},{"label": "Current", "value": "current"}], value="current", inline=True, inputClassName="ms-1 me-2")], className="mb-3"),
-                    html.Div([html.Label("Aircraft Filter:", className="fw-bold"), dcc.Dropdown(id="map-aircraft-filter", multi=True, placeholder="Select aircraft types...")], className="mb-3"),
+                    html.Div([html.Label("Aircraft Filter:", className="fw-bold"), dcc.Dropdown(id="map-aircraft-filter", multi=True, placeholder="Select aircraft types...") ], style={"color":"black"}, className="mb-3"),
                     html.Div([html.Label("Altitude Range (ft):", className="fw-bold"), dcc.RangeSlider(id="map-altitude-range", min=0, max=50000, step=1000, marks={i * 10000: {'label': f"{i*10}k"} for i in range(6)}, value=[0, 50000], tooltip={"placement": "bottom", "always_visible": False}, className="p-0")]),
                     html.Div(dbc.Button("Model Insights", id="insights-button", color="success", className="w-100 mt-4"), className="d-grid gap-2")
                 ])
