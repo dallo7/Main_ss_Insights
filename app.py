@@ -51,7 +51,7 @@ CHART_FONT_COLOR = "#adb5bd"
 CHART_PAPER_BG = 'rgba(0,0,0,0)'
 CHART_PLOT_BG = 'rgba(0,0,0,0)'
 NA_REPLACE_VALUES = ['', 'nan', 'NaN', 'None', 'null', 'NONE', 'NULL', '#N/A', 'N/A', 'NA', '-']
-CSV_FILE_PATH = "flight_data.csv" # Path to store the CSV
+CSV_FILE_PATH = "flight_data.csv"
 
 # --- Initialize Fetcher ---
 fetcher = None
@@ -99,14 +99,11 @@ def load_data_from_csv():
     if os.path.exists(CSV_FILE_PATH):
         try:
             df = pd.read_csv(CSV_FILE_PATH)
-            # Convert LAST_UPDATE_TIME back to string format for dcc.Store
-            if 'LAST_UPDATE_TIME' in df.columns:
-                df['LAST_UPDATE_TIME'] = pd.to_datetime(df['LAST_UPDATE_TIME']).dt.strftime('%Y-%m-%dT%H:%M:%SZ')
-            return df.to_dict("records")
+            return df
         except Exception as e:
             print(f"Error loading data from CSV: {e}")
-            return []
-    return []
+            return pd.DataFrame()
+    return pd.DataFrame()
 
 def delete_csv():
     """Deletes the CSV file."""
@@ -128,8 +125,7 @@ def schedule_deletion():
 
 # --- Main Application Layout ---
 app.layout = dbc.Container([
-    # Store for PERSISTENT flight data
-    dcc.Store(id="flight-data-store", storage_type='memory', data=load_data_from_csv()),
+
     dcc.Download(id="download-csv"),
 
     # Header
@@ -143,7 +139,7 @@ app.layout = dbc.Container([
                 dbc.CardHeader("Map Controls"),
                 dbc.CardBody([
                     html.Div([html.Label("Display Mode:", className="fw-bold"), dbc.RadioItems(id="map-display-mode", options=[{"label": "Routes", "value": "routes"},{"label": "Current", "value": "current"}], value="current", inline=True, inputClassName="ms-1 me-2")], className="mb-3"),
-                    html.Div([html.Label("Aircraft Filter:", className="fw-bold"), dcc.Dropdown(id="map-aircraft-filter", multi=True, placeholder="Select aircraft types...") ], style={"color":"black"}, className="mb-3"),
+                    html.Div([html.Label("Aircraft Filter:", className="fw-bold"), dcc.Dropdown(id="map-aircraft-filter", multi=True, placeholder="Select aircraft types...")], className="mb-3"),
                     html.Div([html.Label("Altitude Range (ft):", className="fw-bold"), dcc.RangeSlider(id="map-altitude-range", min=0, max=50000, step=1000, marks={i * 10000: {'label': f"{i*10}k"} for i in range(6)}, value=[0, 50000], tooltip={"placement": "bottom", "always_visible": False}, className="p-0")]),
                     html.Div(dbc.Button("Model Insights", id="insights-button", color="success", className="w-100 mt-4"), className="d-grid gap-2")
                 ])
@@ -217,24 +213,21 @@ schedule_deletion()
 # --- Callbacks ---
 
 @callback(
-    Output("flight-data-store", "data"),
     Output('last-update-timestamp', 'children'),
     Input("interval-component", "n_intervals"),
-    State("flight-data-store", "data"),
     prevent_initial_call=True
 )
-def update_data(n_intervals, existing_data):
+def update_data(n_intervals):
     """
     Callback triggered every FETCH_INTERVAL_SECONDS.
-    Fetches the latest batch of new flight data from the API, stores it in a CSV,
-    and returns the data for the dcc.Store.
+    Fetches the latest batch of new flight data from the API and stores it in a CSV.
     """
     global fetcher
 
     if fetcher is None:
         timestamp = datetime.now(DISPLAY_TIMEZONE).strftime('%Y-%m-%d %H:%M:%S %Z')
         print("ERROR in update_data: Fetcher not available.")
-        return existing_data or no_update, f"Fetcher Init Error at {timestamp}"
+        return f"Fetcher Init Error at {timestamp}"
 
     print(f"[{datetime.now(timezone.utc).isoformat(timespec='seconds')}] Interval {n_intervals}: update_data triggered.")
     fetch_time = datetime.now(DISPLAY_TIMEZONE)
@@ -247,12 +240,12 @@ def update_data(n_intervals, existing_data):
 
         if df_batch is None:
             print(f"ERROR in update_data: fetch_next_batch() returned None (API fetch error).")
-            return existing_data or no_update, f"{error_msg_base} (API Fetch Error)"
+            return f"{error_msg_base} (API Fetch Error)"
 
         if df_batch.empty:
             print(f"No new flight data received since last check.")
             last_ts_msg = fetcher.last_processed_timestamp or "initial fetch"
-            return existing_data or no_update, f"{success_msg_base} (No New Data since {last_ts_msg})"
+            return f"{success_msg_base} (No New Data since {last_ts_msg})"
 
         print(f"Fetched batch with {len(df_batch)} new/updated records.")
 
@@ -274,7 +267,7 @@ def update_data(n_intervals, existing_data):
         if not all(col in df_processed_batch.columns for col in essential_cols):
             missing = [c for c in essential_cols if c not in df_processed_batch.columns]
             print(f"Warning: Batch missing essential columns after rename: {missing}. Skipping batch.")
-            return existing_data or no_update, f"{error_msg_base} (Missing Essential Cols)"
+            return f"{error_msg_base} (Missing Essential Cols)"
 
         if "LAST_UPDATE_TIME" in df_processed_batch.columns:
             df_processed_batch["LAST_UPDATE_TIME"] = pd.to_datetime(
@@ -292,7 +285,7 @@ def update_data(n_intervals, existing_data):
         df_processed_batch.dropna(subset=essential_cols, inplace=True)
         if df_processed_batch.empty:
             print(f"Batch empty after dropping rows with null essential data.")
-            return existing_data or no_update, f"{success_msg_base} (No Valid Data Points)"
+            return f"{success_msg_base} (No Valid Data Points)"
 
         str_cols = ['AIRCRAFT_MODEL', 'REGISTRATION', 'ORIGIN', 'DESTINATION', 'FLIGHT_NUMBER', 'FLIGHT_CALLSIGN']
         for col in str_cols:
@@ -311,26 +304,19 @@ def update_data(n_intervals, existing_data):
 
         if df_processed_batch.empty:
             print(f"Batch empty after final Flight ID filtering.")
-            return existing_data or no_update, f"{success_msg_base} (No Valid Flight IDs)"
+            return f"{success_msg_base} (No Valid Flight IDs)"
 
-        df_old = pd.DataFrame()
-        if existing_data:
-            try:
-                df_old = pd.DataFrame(existing_data)
-                if 'LAST_UPDATE_TIME' in df_old.columns:
-                    df_old['LAST_UPDATE_TIME'] = pd.to_datetime(df_old['LAST_UPDATE_TIME'], errors='coerce', utc=True)
-                else:
-                    df_old['LAST_UPDATE_TIME'] = pd.NaT
+        df_old = load_data_from_csv()
+        if 'LAST_UPDATE_TIME' in df_old.columns:
+            df_old['LAST_UPDATE_TIME'] = pd.to_datetime(df_old['LAST_UPDATE_TIME'], errors='coerce', utc=True)
+        else:
+            df_old['LAST_UPDATE_TIME'] = pd.NaT
 
-                for col in essential_cols:
-                    if col not in df_old.columns:
-                        df_old[col] = pd.NA if col != 'LAST_UPDATE_TIME' else pd.NaT
+        for col in essential_cols:
+            if col not in df_old.columns:
+                df_old[col] = pd.NA if col != 'LAST_UPDATE_TIME' else pd.NaT
 
-                df_old.dropna(subset=['LAST_UPDATE_TIME'], inplace=True)
-
-            except Exception as e:
-                print(f"Error loading existing data from store: {e}. Starting fresh.")
-                df_old = pd.DataFrame()
+        df_old.dropna(subset=['LAST_UPDATE_TIME'], inplace=True)
 
         all_cols = set(df_old.columns) | set(df_processed_batch.columns)
         df_combined = pd.concat([
@@ -357,7 +343,9 @@ def update_data(n_intervals, existing_data):
         if df_persistent.empty:
             print("No data left after pruning.")
             status_msg = f"No data within {PERSISTENCE_HOURS} hours. Last check: {fetch_time.strftime('%Y-%m-%d %H:%M:%S %Z')}"
-            return [], status_msg
+            # Save empty dataframe to clear the CSV if needed
+            df_persistent.to_csv(CSV_FILE_PATH, index=False, encoding='utf-8')
+            return status_msg
 
         print(f"Combined data: {len(df_combined)} rows. Persisting {len(df_persistent)} rows (last {PERSISTENCE_HOURS}h).")
 
@@ -375,23 +363,23 @@ def update_data(n_intervals, existing_data):
 
         status_msg = f"Data updated: {fetch_time.strftime('%Y-%m-%d %H:%M:%S %Z')} ({len(df_processed_batch)} new pts | {len(df_final_persistent)} total pts stored)"
 
-        return df_final_persistent.to_dict("records"), status_msg
+        return status_msg
 
     except Exception as e:
         print(f"ERROR in update_data: Unexpected failure - {e}")
         traceback.print_exc()
-        return existing_data or no_update, f"{error_msg_base} (Processing Error)"
+        return f"{error_msg_base} (Processing Error)"
 
 
 @callback(
     Output("map-aircraft-filter", "options"),
-    Input("flight-data-store", "data"),
+    Input("interval-component", "n_intervals"), # Changed input
     prevent_initial_call=True
 )
-def update_aircraft_filter_options(persistent_data):
-    if not persistent_data: return []
+def update_aircraft_filter_options(n_intervals): # Removed persistent_data argument
+    df = load_data_from_csv()
+    if df.empty: return []
     try:
-        df = pd.DataFrame(persistent_data);
         if "AIRCRAFT_MODEL" not in df.columns: return []
         all_types = df["AIRCRAFT_MODEL"].astype(str).fillna('N/A').replace(NA_REPLACE_VALUES, 'N/A', regex=False).unique()
         valid_types = sorted([t for t in all_types if t != 'N/A'])
@@ -406,15 +394,16 @@ def update_aircraft_filter_options(persistent_data):
     Output("flight-table", "data"),
     Output("flight-table", "columns"),
     Output("flight-table", "selected_rows"),
-    Input("flight-data-store", "data"),
+    Input("interval-component", "n_intervals"), # Changed input
     prevent_initial_call=True
 )
-def update_flight_table(persistent_data):
-    print(f"Updating flight table from {len(persistent_data)} records in store.")
-    if not persistent_data:
+def update_flight_table(n_intervals): # Removed persistent_data argument
+    df_persistent = load_data_from_csv()
+    print(f"Updating flight table from {len(df_persistent)} records in CSV.")
+    if df_persistent.empty:
         return [], [], []
     try:
-        df_persistent = pd.DataFrame(persistent_data).replace({None: pd.NA})
+        df_persistent = df_persistent.replace({None: pd.NA})
 
         if 'LAST_UPDATE_TIME' in df_persistent.columns:
             df_persistent['LAST_UPDATE_TIME'] = pd.to_datetime(df_persistent['LAST_UPDATE_TIME'], errors='coerce', utc=True)
@@ -474,21 +463,22 @@ def update_flight_table(persistent_data):
 
 @callback(
     Output("flight-map", "figure"),
-    Input("flight-data-store", "data"),
+    Input("interval-component", "n_intervals"), # Changed input
     Input("map-display-mode", "value"),
     Input("map-aircraft-filter", "value"),
     Input("map-altitude-range", "value"),
     Input("flight-table", "derived_virtual_data"),
     prevent_initial_call=True
 )
-def update_flight_map(persistent_data, map_display_mode, map_selected_aircraft, map_altitude_range, table_derived_data):
-    if not persistent_data:
+def update_flight_map(n_intervals, map_display_mode, map_selected_aircraft, map_altitude_range, table_derived_data): # Removed persistent_data argument
+    df = load_data_from_csv()
+    if df.empty:
         return create_empty_map_figure("Waiting for data...")
 
-    print(f"Updating map from {len(persistent_data)} records. Mode: {map_display_mode}")
+    print(f"Updating map from {len(df)} records in CSV. Mode: {map_display_mode}")
 
     try:
-        df = pd.DataFrame(persistent_data).replace({None: pd.NA})
+        df = df.replace({None: pd.NA})
 
         essential_cols = ['LATITUDE', 'LONGITUDE', 'LAST_UPDATE_TIME', FLIGHT_ID_COLUMN]
         if not all(c in df.columns for c in essential_cols):
@@ -661,20 +651,21 @@ def update_flight_map(persistent_data, map_display_mode, map_selected_aircraft, 
     Output("analytics-speed-dist", "figure"),
     Output("analytics-top-origins", "figure"),
     Output("analytics-top-routes", "figure"),
-    Input("flight-data-store", "data"),
+    Input("interval-component", "n_intervals"), # Changed input
     Input("flight-table", "derived_virtual_data"),
 )
-def update_analytics(persistent_data, table_derived_data):
+def update_analytics(n_intervals, table_derived_data): # Removed persistent_data argument
+    df_persistent = load_data_from_csv()
     no_data_str="-"; no_data_fig=create_empty_analytics_figure();
     default_outputs=(no_data_str, no_data_str, no_data_fig, no_data_fig, no_data_fig, no_data_fig, no_data_fig, no_data_fig)
 
-    if not persistent_data:
+    if df_persistent.empty:
         return default_outputs
 
-    print(f"Updating analytics from {len(persistent_data)} records in store.")
+    print(f"Updating analytics from {len(df_persistent)} records in CSV.")
 
     try:
-        df_persistent = pd.DataFrame(persistent_data).replace({None: pd.NA})
+        df_persistent = df_persistent.replace({None: pd.NA})
         if df_persistent.empty: raise ValueError("Empty persistent data for analytics")
 
         df_persistent[FLIGHT_ID_COLUMN] = df_persistent[FLIGHT_ID_COLUMN].astype(str).fillna('N/A')
@@ -861,38 +852,39 @@ def download_table_csv(n_clicks, table_data):
     Output("insights-modal", "is_open"), Output("insights-modal-body", "children"),
     Input("insights-button", "n_clicks"), Input("insights-modal-close", "n_clicks"),
     State("insights-modal", "is_open"),
-    State("flight-data-store", "data"),
+    Input("interval-component", "n_intervals"), # Changed input
     State("flight-table", "derived_virtual_data"),
     prevent_initial_call=True,
 )
 def toggle_and_load_insights(
     btn_open_clicks, btn_close_clicks, is_open,
-    flight_data, table_derived_data
+    n_intervals, table_derived_data
     ):
     trigger_id = ctx.triggered_id
     if trigger_id == "insights-modal-close" and is_open:
         return False, dash.no_update
 
     if trigger_id == "insights-button":
-        if not flight_data:
+        df = load_data_from_csv()
+        if df.empty:
             return True, html.Div("No flight data available.", className="text-warning")
         if helpers is None:
             return True, html.Div("Error: Insights helper module not loaded.", className="text-danger")
 
         try:
             print("[Insights] Preparing data based on table filter...")
-            df = pd.DataFrame(flight_data).replace({None: np.nan})
+            df = df.replace({None: np.nan})
 
             required = [FLIGHT_ID_COLUMN, 'LAST_UPDATE_TIME', 'ALTITUDE', 'SPEED', 'AIRCRAFT_MODEL', 'ORIGIN', 'DESTINATION']
             if not all(c in df.columns for c in required):
                 missing = [c for c in required if c not in df.columns]
-                print(f"Insights Prep Err: Missing required columns in store data: {missing}")
+                print(f"Insights Prep Err: Missing required columns in CSV data: {missing}")
                 return True, html.Div(f"Data Error for Insights: Missing {', '.join(missing)}", className="text-danger")
 
             df[FLIGHT_ID_COLUMN] = df[FLIGHT_ID_COLUMN].astype(str)
             df['LAST_UPDATE_TIME'] = pd.to_datetime(df['LAST_UPDATE_TIME'], errors='coerce')
             df.dropna(subset=[FLIGHT_ID_COLUMN, 'LAST_UPDATE_TIME'], inplace=True)
-            if df.empty: raise ValueError("No valid time/id data in store for insights")
+            if df.empty: raise ValueError("No valid time/id data in CSV for insights")
 
             table_filtered_ids = set()
             df_processed = df
@@ -1010,8 +1002,8 @@ if __name__ == "__main__":
     print("(Use Ctrl+C to stop)")
     print("-" * 50)
     try:
-        app.run(debug=True, host= "0.0.0.0", port=5188, use_reloader=False)
+        app.run(debug=True, host= "0.0.0.0", port=5998, use_reloader=False)
     except KeyboardInterrupt:
         print("\nKeyboardInterrupt received. Shutting down Dash server...")
     finally:
-        print("Dash server shut down.")
+        pass
